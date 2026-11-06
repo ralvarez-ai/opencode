@@ -1,0 +1,116 @@
+version: '3'
+
+# Applies the token tooling and instructions to the live OpenCode configuration.
+# Every write to an instructions file is backed up; the tools' own installers
+# back up what they patch.
+#
+#   task check     report what is applied (read-only, exit 0)
+#   task verify    same check, exit 1 if anything is missing
+#   task install   instructions block + RTK + CodeGraph + context-mode
+
+vars:
+  OC_DIR:
+    sh: echo "${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+  BLOCK: '{{.TASKFILE_DIR}}/scripts/apply-block.py'
+  RTK_VERSION: v1.1.0
+  CODEGRAPH_VERSION: 1.6.2
+
+tasks:
+  default:
+    desc: List the tasks
+    silent: true
+    cmds:
+      - task --list
+
+  install:
+    desc: Apply the instructions block and the token tools
+    cmds:
+      - task: install:instructions
+      - task: install:tools
+      - task: check
+
+  install:instructions:
+    desc: Write the token-discipline block into the global AGENTS.md (backs up first)
+    cmds:
+      - python3 {{.BLOCK}} "{{.OC_DIR}}/AGENTS.md" instructions/token-discipline.md TOKEN_DISCIPLINE
+
+  install:tools:
+    desc: Install RTK, CodeGraph and context-mode and wire them into OpenCode
+    cmds:
+      - task: install:rtk
+      - task: install:codegraph
+      - task: install:context-mode
+
+  install:rtk:
+    desc: Install RTK (checksum-verified installer) and its OpenCode plugin, no RTK.md
+    status:
+      - test "$(rtk --version 2>/dev/null)" = "rtk {{trimPrefix "v" .RTK_VERSION}}"
+      - test -f "{{.OC_DIR}}/plugins/rtk.ts"
+    cmds:
+      - |
+        set -eu
+        tmp=$(mktemp -d)
+        trap 'rm -rf "$tmp"' EXIT
+        curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh -o "$tmp/install.sh"
+        RTK_VERSION={{.RTK_VERSION}} sh "$tmp/install.sh"
+        rtk gain >/dev/null || { echo "rtk gain failed: wrong rtk binary on PATH?" >&2; exit 1; }
+        # --opencode also (re)applies the Claude Code hook; RTK has no OpenCode-only mode.
+        rtk init -g --opencode --hook-only --auto-patch
+
+  install:codegraph:
+    desc: Install CodeGraph and register its MCP server in OpenCode (index repos with codegraph init)
+    status:
+      - test "$(codegraph --version 2>/dev/null)" = "{{.CODEGRAPH_VERSION}}"
+      - grep -qs '"codegraph"' "{{.OC_DIR}}/opencode.jsonc" "{{.OC_DIR}}/opencode.json"
+    cmds:
+      - npm i -g @colbymchenry/codegraph@{{.CODEGRAPH_VERSION}}
+      - codegraph install -t opencode -l global -y
+
+  install:context-mode:
+    desc: Add the context-mode plugin, or update it when present
+    cmds:
+      - |
+        set -eu
+        if grep -qs '"context-mode"' "{{.OC_DIR}}/opencode.jsonc" "{{.OC_DIR}}/opencode.json"; then
+          opencode plugin update   # by name it reports "not configured" on 2.1.4
+        else
+          opencode plugin add context-mode
+        fi
+
+  check:
+    desc: Report the state of each piece (read-only)
+    silent: true
+    cmds:
+      - |
+        dir="{{.OC_DIR}}"
+        gaps=0
+        note() { printf '  %-6s %s\n' "$1" "$2"; }
+        cfg_has() { grep -qs "$1" "$dir/opencode.jsonc" "$dir/opencode.json"; }
+
+        if python3 {{.BLOCK}} "$dir/AGENTS.md" instructions/token-discipline.md TOKEN_DISCIPLINE --check; then note ok "AGENTS.md block"; else note MISS "AGENTS.md block"; gaps=$((gaps+1)); fi
+        if rtk gain >/dev/null 2>&1 && [ -f "$dir/plugins/rtk.ts" ]; then note ok "rtk {{.RTK_VERSION}}"; else note MISS "rtk"; gaps=$((gaps+1)); fi
+        if command -v codegraph >/dev/null && cfg_has '"codegraph"'; then note ok "codegraph"; else note MISS "codegraph"; gaps=$((gaps+1)); fi
+        if cfg_has '"context-mode"'; then note ok "context-mode"; else note MISS "context-mode"; gaps=$((gaps+1)); fi
+
+        echo
+        if [ "$gaps" -eq 0 ]; then echo "everything applied"; else echo "$gaps pending — run: task install"; fi
+
+  verify:
+    desc: Like check, but exits 1 when something is missing
+    silent: true
+    cmds:
+      - |
+        out=$(task --silent check)
+        echo "$out"
+        echo "$out" | grep -q "everything applied" || exit 1
+
+  uninstall:
+    desc: Remove the AGENTS.md block (the tools stay; see README to remove them)
+    cmds:
+      - python3 {{.BLOCK}} "{{.OC_DIR}}/AGENTS.md" instructions/token-discipline.md TOKEN_DISCIPLINE --remove
+
+  lint:
+    desc: Syntax-check the scripts
+    cmds:
+      - python3 -m py_compile scripts/apply-block.py
+      - echo ok
