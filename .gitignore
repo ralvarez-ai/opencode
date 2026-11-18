@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 .task/
+
+# CodeGraph index (local; rebuild with `codegraph init`)
+.codegraph/

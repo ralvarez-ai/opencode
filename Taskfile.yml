@@ -12,8 +12,10 @@ vars:
   OC_DIR:
     sh: echo "${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
   BLOCK: '{{.TASKFILE_DIR}}/scripts/apply-block.py'
+  PROJECTS_ROOT:
+    sh: echo "${PROJECTS_ROOT:-$HOME/Dev/active/projects}"
   RTK_VERSION: v1.1.0
-  CODEGRAPH_VERSION: 1.6.2
+  CODEGRAPH_VERSION: 1.6.3
 
 tasks:
   default:
@@ -91,9 +93,44 @@ tasks:
         if rtk gain >/dev/null 2>&1 && [ -f "$dir/plugins/rtk.ts" ]; then note ok "rtk {{.RTK_VERSION}}"; else note MISS "rtk"; gaps=$((gaps+1)); fi
         if command -v codegraph >/dev/null && cfg_has '"codegraph"'; then note ok "codegraph"; else note MISS "codegraph"; gaps=$((gaps+1)); fi
         if cfg_has '"context-mode"'; then note ok "context-mode"; else note MISS "context-mode"; gaps=$((gaps+1)); fi
+        repos=$(task --silent check:repos)
+        echo "$repos"
+        echo "$repos" | grep -q MISS && gaps=$((gaps+1))
 
         echo
-        if [ "$gaps" -eq 0 ]; then echo "everything applied"; else echo "$gaps pending — run: task install"; fi
+        if [ "$gaps" -eq 0 ]; then echo "everything applied"; else echo "$gaps pending — run: task install (repos: task index:repos)"; fi
+
+  check:repos:
+    desc: Report how many active repos under PROJECTS_ROOT have a CodeGraph index (read-only)
+    silent: true
+    cmds:
+      - |
+        root="{{.PROJECTS_ROOT}}"
+        total=0; indexed=0; missing=""
+        for r in "$root"/*/*; do
+          [ -d "$r/.git" ] || continue
+          total=$((total+1))
+          if [ -f "$r/.codegraph/codegraph.db" ]; then indexed=$((indexed+1)); else missing="$missing ${r#"$root"/}"; fi
+        done
+        state=ok; [ "$indexed" -eq "$total" ] || state=MISS
+        printf '  %-6s codegraph repos %s/%s indexed\n' "$state" "$indexed" "$total"
+        [ -z "$missing" ] || printf '         pending:%s\n' "$missing"
+
+  index:repos:
+    desc: Index every active repo under PROJECTS_ROOT with CodeGraph (skips indexed ones)
+    silent: true
+    cmds:
+      - |
+        set -u
+        root="{{.PROJECTS_ROOT}}"
+        [ -d "$root" ] || { echo "no such directory: $root" >&2; exit 1; }
+        for r in "$root"/*/*; do
+          [ -d "$r/.git" ] || continue
+          rel="${r#"$root"/}"
+          if [ -f "$r/.codegraph/codegraph.db" ]; then echo "  skip  $rel"; continue; fi
+          if (cd "$r" && codegraph init . -y >/dev/null 2>&1); then echo "  ok    $rel"; else echo "  FAIL  $rel"; fi
+          grep -qxF '.codegraph/' "$r/.gitignore" 2>/dev/null || printf '\n# CodeGraph index (local; rebuild with `codegraph init`)\n.codegraph/\n' >> "$r/.gitignore"
+        done
 
   verify:
     desc: Like check, but exits 1 when something is missing

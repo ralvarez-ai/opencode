@@ -10,13 +10,14 @@ applied idempotently by `task install`. The Claude Code counterpart is the sibli
 |---|---|---|
 | Instructions block | `instructions/token-discipline.md` | `~/.config/opencode/AGENTS.md` (marked block `TOKEN_DISCIPLINE`) |
 | RTK | `task install:rtk` | `~/.local/bin/rtk` + `~/.config/opencode/plugins/rtk.ts` |
-| CodeGraph | `task install:codegraph` | npm global + `mcp.servers.codegraph` in `opencode.jsonc` |
+| CodeGraph | `task install:codegraph` | npm global + `mcp.servers.codegraph` in `opencode.jsonc`; `task index:repos` indexes every repo |
 | context-mode | `task install:context-mode` | `plugins` in `opencode.jsonc` |
 
 ```bash
 task              # list the tasks
 task check        # what is applied and what is missing (read-only)
 task install      # apply everything
+task index:repos  # CodeGraph-index every active repo under PROJECTS_ROOT
 task uninstall    # remove the instructions block
 ```
 
@@ -26,8 +27,11 @@ task uninstall    # remove the instructions block
   `rtk init --opencode` also (re)applies the Claude Code hook; RTK has no OpenCode-only mode.
   Savings: `rtk gain`.
 - **CodeGraph** only acts in repos that have an index: run `codegraph init` in a repo and
-  add `.codegraph/` to its `.gitignore`. It writes its own marked block to `AGENTS.md`.
-  Telemetry is on by default: `codegraph telemetry off` disables it.
+  add `.codegraph/` to its `.gitignore`. `task index:repos` does both for every git repo
+  under `PROJECTS_ROOT` (default `~/Dev/active/projects`) and skips the ones already
+  indexed; `task check` reports the fleet-wide coverage, so a repo that was never indexed
+  shows up instead of silently falling back to grep. Telemetry is on by default:
+  `codegraph telemetry off` disables it.
 - **context-mode** loads its `ctx_*` tools and routing hooks. Measure what it injects
   before trusting it on long sessions (the `claude` repo has the audit).
 - **`opencode mcp list`** in 2.1.x does not show servers under `mcp.servers`; check with
